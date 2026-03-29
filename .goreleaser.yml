@@ -4,9 +4,47 @@ builds:
   - id: "cli-proxy-api"
     env:
       - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
     goos:
       - linux
+    goarch:
+      - arm64
+    hooks:
+      before:
+        - apt-get update && apt-get install -y gcc-aarch64-linux-gnu
+    main: ./cmd/server/
+    binary: cli-proxy-api
+    ldflags:
+      - -s -w -X 'main.Version={{.Version}}' -X 'main.Commit={{.ShortCommit}}' -X 'main.BuildDate={{.Date}}'
+
+  - id: "cli-proxy-api-amd64"
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+    goarch:
+      - amd64
+    main: ./cmd/server/
+    binary: cli-proxy-api
+    ldflags:
+      - -s -w -X 'main.Version={{.Version}}' -X 'main.Commit={{.ShortCommit}}' -X 'main.BuildDate={{.Date}}'
+
+  - id: "cli-proxy-api-windows"
+    env:
+      - CGO_ENABLED=1
+    goos:
       - windows
+    goarch:
+      - amd64
+    main: ./cmd/server/
+    binary: cli-proxy-api
+    ldflags:
+      - -s -w -X 'main.Version={{.Version}}' -X 'main.Commit={{.ShortCommit}}' -X 'main.BuildDate={{.Date}}'
+
+  - id: "cli-proxy-api-darwin"
+    env:
+      - CGO_ENABLED=1
+    goos:
       - darwin
     goarch:
       - amd64
