@@ -1,17 +1,17 @@
 version: 2
 
 builds:
-  - id: "cli-proxy-api"
+  - id: "cli-proxy-api-arm64"
     env:
       - CGO_ENABLED=1
       - CC=aarch64-linux-gnu-gcc
+    before:
+      hooks:
+        - apt-get update && apt-get install -y gcc-aarch64-linux-gnu
     goos:
       - linux
     goarch:
       - arm64
-    hooks:
-      before:
-        - apt-get update && apt-get install -y gcc-aarch64-linux-gnu
     main: ./cmd/server/
     binary: cli-proxy-api
     ldflags:
