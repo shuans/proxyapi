@@ -5,21 +5,43 @@ before:
     - go mod download
 
 builds:
-  - id: "cli-proxy-api"
+  - id: "cli-proxy-api-linux"
     builder: go
     env:
       - CGO_ENABLED=1
       - >-
-        {{- if and (eq .Os "linux") (eq .Arch "arm64") }}CC=aarch64-linux-gnu-gcc{{- end }}
-      - >-
-        {{- if and (eq .Os "windows") }}CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++{{- end }}
+        {{- if eq .Arch "arm64" }}CC=aarch64-linux-gnu-gcc{{- end }}
     goos:
       - linux
-      - windows
+    goarch:
+      - amd64
+      - arm64
+    main: ./cmd/server/
+    binary: cli-proxy-api
+    ldflags:
+      - -s -w -X 'main.Version={{.Version}}' -X 'main.Commit={{.ShortCommit}}' -X 'main.BuildDate={{.Date}}'
+
+  - id: "cli-proxy-api-darwin"
+    builder: go
+    env:
+      - CGO_ENABLED=1
+    goos:
       - darwin
     goarch:
       - amd64
       - arm64
+    main: ./cmd/server/
+    binary: cli-proxy-api
+    ldflags:
+      - -s -w -X 'main.Version={{.Version}}' -X 'main.Commit={{.ShortCommit}}' -X 'main.BuildDate={{.Date}}'
+
+  - id: "cli-proxy-api-windows"
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
     main: ./cmd/server/
     binary: cli-proxy-api
     ldflags:
