@@ -1,50 +1,19 @@
 version: 2
 
+before:
+  hooks:
+    - go mod download
+
 builds:
-  - id: "cli-proxy-api-arm64"
+  - id: "cli-proxy-api"
+    builder: go
     env:
       - CGO_ENABLED=1
-      - CC=aarch64-linux-gnu-gcc
-    before:
-      hooks:
-        - apt-get update && apt-get install -y gcc-aarch64-linux-gnu
+      - >-
+        {{- if and (eq .Os "linux") (eq .Arch "arm64") }}CC=aarch64-linux-gnu-gcc{{- end }}
     goos:
       - linux
-    goarch:
-      - arm64
-    main: ./cmd/server/
-    binary: cli-proxy-api
-    ldflags:
-      - -s -w -X 'main.Version={{.Version}}' -X 'main.Commit={{.ShortCommit}}' -X 'main.BuildDate={{.Date}}'
-
-  - id: "cli-proxy-api-amd64"
-    env:
-      - CGO_ENABLED=1
-    goos:
-      - linux
-    goarch:
-      - amd64
-    main: ./cmd/server/
-    binary: cli-proxy-api
-    ldflags:
-      - -s -w -X 'main.Version={{.Version}}' -X 'main.Commit={{.ShortCommit}}' -X 'main.BuildDate={{.Date}}'
-
-  - id: "cli-proxy-api-windows"
-    env:
-      - CGO_ENABLED=1
-    goos:
       - windows
-    goarch:
-      - amd64
-    main: ./cmd/server/
-    binary: cli-proxy-api
-    ldflags:
-      - -s -w -X 'main.Version={{.Version}}' -X 'main.Commit={{.ShortCommit}}' -X 'main.BuildDate={{.Date}}'
-
-  - id: "cli-proxy-api-darwin"
-    env:
-      - CGO_ENABLED=1
-    goos:
       - darwin
     goarch:
       - amd64
@@ -53,6 +22,7 @@ builds:
     binary: cli-proxy-api
     ldflags:
       - -s -w -X 'main.Version={{.Version}}' -X 'main.Commit={{.ShortCommit}}' -X 'main.BuildDate={{.Date}}'
+
 archives:
   - id: "cli-proxy-api"
     format: tar.gz
