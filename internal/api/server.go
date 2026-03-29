@@ -27,6 +27,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/store"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -271,6 +272,21 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	if optionState.postAuthHook != nil {
 		s.mgmt.SetPostAuthHook(optionState.postAuthHook)
 	}
+
+	// Initialize usage store if not disabled
+	if cfg.UsageStatisticsEnabled {
+		usageStoreDir := filepath.Dir(configFilePath)
+		if usageStoreDir == "" || usageStoreDir == "." {
+			usageStoreDir = filepath.Join(wd, "data")
+		}
+		usageStore, errStore := store.NewUsageStore(store.UsageStoreConfig{Dir: usageStoreDir})
+		if errStore != nil {
+			log.Warnf("failed to initialize usage store: %v", errStore)
+		} else {
+			s.mgmt.SetUsageStore(usageStore)
+			log.Infof("usage statistics store enabled: %s", filepath.Join(usageStoreDir, "usage_stats.db"))
+		}
+	}
 	s.localPassword = optionState.localPassword
 
 	// Setup routes
@@ -489,6 +505,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/usage", s.mgmt.GetUsageStatistics)
 		mgmt.GET("/usage/export", s.mgmt.ExportUsageStatistics)
 		mgmt.POST("/usage/import", s.mgmt.ImportUsageStatistics)
+		mgmt.GET("/usage/query", s.mgmt.QueryUsage)
 		mgmt.GET("/config", s.mgmt.GetConfig)
 		mgmt.GET("/config.yaml", s.mgmt.GetConfigYAML)
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)

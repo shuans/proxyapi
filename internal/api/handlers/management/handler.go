@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/buildinfo"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/store"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -42,6 +43,7 @@ type Handler struct {
 	failedAttempts      map[string]*attemptInfo // keyed by client IP
 	authManager         *coreauth.Manager
 	usageStats          *usage.RequestStatistics
+	usageStore          *store.UsageStore
 	tokenStore          coreauth.Store
 	localPassword       string
 	allowRemoteOverride bool
@@ -112,6 +114,9 @@ func (h *Handler) SetAuthManager(manager *coreauth.Manager) { h.authManager = ma
 
 // SetUsageStatistics allows replacing the usage statistics reference.
 func (h *Handler) SetUsageStatistics(stats *usage.RequestStatistics) { h.usageStats = stats }
+
+// SetUsageStore configures the DuckDB-backed usage store.
+func (h *Handler) SetUsageStore(store *store.UsageStore) { h.usageStore = store }
 
 // SetLocalPassword configures the runtime-local password accepted for localhost requests.
 func (h *Handler) SetLocalPassword(password string) { h.localPassword = password }
