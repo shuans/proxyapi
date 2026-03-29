@@ -43,6 +43,7 @@ Get 10% OFF GLM CODING PLAN：https://z.ai/subscribe?ic=8JVLJQFSKB
 
 ## Overview
 
+- DuckDB-based usage statistics storage with flexible query support
 - OpenAI/Gemini/Claude compatible API endpoints for CLI models
 - OpenAI Codex support (GPT models) via OAuth login
 - Claude Code support via OAuth login
