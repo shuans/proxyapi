@@ -7,8 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
-	_ "github.com/duckdb/duckdb-go/v2"
+	_ "github.com/mattn/go-sqlite3"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -47,10 +48,11 @@ func NewUsageStore(cfg UsageStoreConfig) (*UsageStore, error) {
 func (s *UsageStore) init() error {
 	dbPath := filepath.Join(s.dir, "usage_stats.db")
 
-	db, err := sql.Open("duckdb", dbPath)
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return fmt.Errorf("usage store: open database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
 	s.db = db
 
 	if err := s.ensureSchema(); err != nil {
@@ -74,61 +76,56 @@ func (s *UsageStore) ensureSchema() error {
 	}
 
 	schema := `
-	CREATE SEQUENCE IF NOT EXISTS requests_id_seq;
 	CREATE TABLE IF NOT EXISTS requests (
-		id BIGINT DEFAULT nextval('requests_id_seq') PRIMARY KEY,
-		timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		api_key VARCHAR NOT NULL,
-		model VARCHAR NOT NULL,
-		source VARCHAR,
-		auth_index VARCHAR,
-		input_tokens BIGINT NOT NULL DEFAULT 0,
-		output_tokens BIGINT NOT NULL DEFAULT 0,
-		reasoning_tokens BIGINT NOT NULL DEFAULT 0,
-		cached_tokens BIGINT NOT NULL DEFAULT 0,
-		total_tokens BIGINT NOT NULL DEFAULT 0,
-		latency_ms BIGINT NOT NULL DEFAULT 0,
-		failed BOOLEAN NOT NULL DEFAULT false,
-		provider VARCHAR,
-		request_id VARCHAR
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+		api_key TEXT NOT NULL,
+		model TEXT NOT NULL,
+		source TEXT,
+		auth_index TEXT,
+		input_tokens INTEGER NOT NULL DEFAULT 0,
+		output_tokens INTEGER NOT NULL DEFAULT 0,
+		reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+		cached_tokens INTEGER NOT NULL DEFAULT 0,
+		total_tokens INTEGER NOT NULL DEFAULT 0,
+		latency_ms INTEGER NOT NULL DEFAULT 0,
+		failed INTEGER NOT NULL DEFAULT 0,
+		provider TEXT,
+		request_id TEXT
 	);
 
-	CREATE SEQUENCE IF NOT EXISTS daily_stats_id_seq;
+	CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_requests_api_key ON requests(api_key);
+	CREATE INDEX IF NOT EXISTS idx_requests_model ON requests(model);
+
 	CREATE TABLE IF NOT EXISTS daily_stats (
-		id BIGINT DEFAULT nextval('daily_stats_id_seq') PRIMARY KEY,
-		date_key DATE UNIQUE,
-		total_requests BIGINT NOT NULL DEFAULT 0,
-		success_requests BIGINT NOT NULL DEFAULT 0,
-		failed_requests BIGINT NOT NULL DEFAULT 0,
-		total_tokens BIGINT NOT NULL DEFAULT 0
+		date_key TEXT PRIMARY KEY,
+		total_requests INTEGER NOT NULL DEFAULT 0,
+		success_requests INTEGER NOT NULL DEFAULT 0,
+		failed_requests INTEGER NOT NULL DEFAULT 0,
+		total_tokens INTEGER NOT NULL DEFAULT 0
 	);
 
-	CREATE SEQUENCE IF NOT EXISTS hourly_stats_id_seq;
 	CREATE TABLE IF NOT EXISTS hourly_stats (
-		id BIGINT DEFAULT nextval('hourly_stats_id_seq') PRIMARY KEY,
 		hour INTEGER NOT NULL,
-		date_key DATE NOT NULL,
-		total_requests BIGINT NOT NULL DEFAULT 0,
-		total_tokens BIGINT NOT NULL DEFAULT 0,
-		UNIQUE(hour, date_key)
+		date_key TEXT NOT NULL,
+		total_requests INTEGER NOT NULL DEFAULT 0,
+		total_tokens INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY(hour, date_key)
 	);
 
-	CREATE SEQUENCE IF NOT EXISTS api_stats_id_seq;
 	CREATE TABLE IF NOT EXISTS api_stats (
-		id BIGINT DEFAULT nextval('api_stats_id_seq') PRIMARY KEY,
-		api_key VARCHAR UNIQUE,
-		total_requests BIGINT NOT NULL DEFAULT 0,
-		total_tokens BIGINT NOT NULL DEFAULT 0
+		api_key TEXT PRIMARY KEY,
+		total_requests INTEGER NOT NULL DEFAULT 0,
+		total_tokens INTEGER NOT NULL DEFAULT 0
 	);
 
-	CREATE SEQUENCE IF NOT EXISTS model_stats_id_seq;
 	CREATE TABLE IF NOT EXISTS model_stats (
-		id BIGINT DEFAULT nextval('model_stats_id_seq') PRIMARY KEY,
-		api_key VARCHAR NOT NULL,
-		model VARCHAR NOT NULL,
-		total_requests BIGINT NOT NULL DEFAULT 0,
-		total_tokens BIGINT NOT NULL DEFAULT 0,
-		UNIQUE(api_key, model)
+		api_key TEXT NOT NULL,
+		model TEXT NOT NULL,
+		total_requests INTEGER NOT NULL DEFAULT 0,
+		total_tokens INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY(api_key, model)
 	);
 	`
 
@@ -160,40 +157,45 @@ func (s *UsageStore) InsertRecord(ctx context.Context, record UsageRecord) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := time.Now()
+	timestamp := now.Format("2006-01-02 15:04:05")
+	dayKey := now.Format("2006-01-02")
+	hourKey := now.Hour()
+
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO requests (api_key, model, source, auth_index, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, latency_ms, failed, provider, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		record.APIKey, record.Model, record.Source, record.AuthIndex,
+		"INSERT INTO requests (timestamp, api_key, model, source, auth_index, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens, latency_ms, failed, provider, request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		timestamp, record.APIKey, record.Model, record.Source, record.AuthIndex,
 		record.InputTokens, record.OutputTokens, record.ReasoningTokens, record.CachedTokens, record.TotalTokens,
-		record.LatencyMs, record.Failed, record.Provider, record.RequestID)
+		record.LatencyMs, boolToInt(record.Failed), record.Provider, record.RequestID)
 
 	if err != nil {
 		return fmt.Errorf("usage store: insert request: %w", err)
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		"INSERT INTO daily_stats (date_key, total_requests, success_requests, failed_requests, total_tokens) VALUES (CURRENT_DATE, 1, ?, ?, ?) ON CONFLICT(date_key) DO UPDATE SET total_requests = daily_stats.total_requests + 1, success_requests = daily_stats.success_requests + ?, failed_requests = daily_stats.failed_requests + ?, total_tokens = daily_stats.total_tokens + ?",
-		boolToInt(!record.Failed), boolToInt(record.Failed), record.TotalTokens,
+		"INSERT INTO daily_stats (date_key, total_requests, success_requests, failed_requests, total_tokens) VALUES (?, 1, ?, ?, ?) ON CONFLICT(date_key) DO UPDATE SET total_requests = total_requests + 1, success_requests = success_requests + ?, failed_requests = failed_requests + ?, total_tokens = total_tokens + ?",
+		dayKey, boolToInt(!record.Failed), boolToInt(record.Failed), record.TotalTokens,
 		boolToInt(!record.Failed), boolToInt(record.Failed), record.TotalTokens)
 	if err != nil {
 		log.Warnf("usage store: update daily stats failed: %v", err)
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		"INSERT INTO hourly_stats (hour, date_key, total_requests, total_tokens) VALUES (EXTRACT(HOUR FROM CURRENT_TIMESTAMP)::INTEGER, CURRENT_DATE, 1, ?) ON CONFLICT(hour, date_key) DO UPDATE SET total_requests = hourly_stats.total_requests + 1, total_tokens = hourly_stats.total_tokens + ?",
-		record.TotalTokens, record.TotalTokens)
+		"INSERT INTO hourly_stats (hour, date_key, total_requests, total_tokens) VALUES (?, ?, 1, ?) ON CONFLICT(hour, date_key) DO UPDATE SET total_requests = total_requests + 1, total_tokens = total_tokens + ?",
+		hourKey, dayKey, record.TotalTokens, record.TotalTokens)
 	if err != nil {
 		log.Warnf("usage store: update hourly stats failed: %v", err)
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		"INSERT INTO api_stats (api_key, total_requests, total_tokens) VALUES (?, 1, ?) ON CONFLICT(api_key) DO UPDATE SET total_requests = api_stats.total_requests + 1, total_tokens = api_stats.total_tokens + ?",
+		"INSERT INTO api_stats (api_key, total_requests, total_tokens) VALUES (?, 1, ?) ON CONFLICT(api_key) DO UPDATE SET total_requests = total_requests + 1, total_tokens = total_tokens + ?",
 		record.APIKey, record.TotalTokens, record.TotalTokens)
 	if err != nil {
 		log.Warnf("usage store: update api stats failed: %v", err)
 	}
 
 	_, err = s.db.ExecContext(ctx,
-		"INSERT INTO model_stats (api_key, model, total_requests, total_tokens) VALUES (?, ?, 1, ?) ON CONFLICT(api_key, model) DO UPDATE SET total_requests = model_stats.total_requests + 1, total_tokens = model_stats.total_tokens + ?",
+		"INSERT INTO model_stats (api_key, model, total_requests, total_tokens) VALUES (?, ?, 1, ?) ON CONFLICT(api_key, model) DO UPDATE SET total_requests = total_requests + 1, total_tokens = total_tokens + ?",
 		record.APIKey, record.Model, record.TotalTokens, record.TotalTokens)
 	if err != nil {
 		log.Warnf("usage store: update model stats failed: %v", err)
@@ -293,9 +295,11 @@ func (s *UsageStore) GetDailyStats(ctx context.Context, days int) (map[string]in
 		return nil, nil, fmt.Errorf("usage store: not initialized")
 	}
 
+	startDate := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT date_key, total_requests, total_tokens FROM daily_stats WHERE date_key >= CURRENT_DATE - INTERVAL '1 day' * ? ORDER BY date_key DESC LIMIT ?",
-		days, days)
+		"SELECT date_key, total_requests, total_tokens FROM daily_stats WHERE date_key >= ? ORDER BY date_key DESC LIMIT ?",
+		startDate, days)
 	if err != nil {
 		return nil, nil, fmt.Errorf("usage store: query daily stats: %w", err)
 	}
@@ -321,9 +325,11 @@ func (s *UsageStore) GetHourlyStats(ctx context.Context, days int) (map[string]i
 		return nil, nil, fmt.Errorf("usage store: not initialized")
 	}
 
+	startDate := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT hour, SUM(total_requests), SUM(total_tokens) FROM hourly_stats WHERE date_key >= CURRENT_DATE - INTERVAL '1 day' * ? GROUP BY hour ORDER BY hour",
-		days)
+		"SELECT hour, SUM(total_requests), SUM(total_tokens) FROM hourly_stats WHERE date_key >= ? GROUP BY hour ORDER BY hour",
+		startDate)
 	if err != nil {
 		return nil, nil, fmt.Errorf("usage store: query hourly stats: %w", err)
 	}
@@ -373,13 +379,13 @@ func (s *UsageStore) QueryRequests(ctx context.Context, apiKey, model string, li
 	var results []UsageRecord
 	for rows.Next() {
 		var r UsageRecord
-		var failed bool
+		var failed int
 		if err := rows.Scan(&r.APIKey, &r.Model, &r.Source, &r.AuthIndex,
 			&r.InputTokens, &r.OutputTokens, &r.ReasoningTokens, &r.CachedTokens, &r.TotalTokens,
 			&r.LatencyMs, &failed, &r.Provider, &r.RequestID); err != nil {
 			continue
 		}
-		r.Failed = failed
+		r.Failed = failed == 1
 		results = append(results, r)
 	}
 

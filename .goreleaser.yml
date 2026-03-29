@@ -8,11 +8,11 @@ builds:
   - id: "cli-proxy-api"
     builder: go
     env:
-      - CGO_ENABLED=1
-      - >-
-        {{- if and (eq .Os "linux") (eq .Arch "arm64") }}CC=aarch64-linux-gnu-gcc{{- end }}
+      - CGO_ENABLED=0
     goos:
       - linux
+      - windows
+      - darwin
     goarch:
       - amd64
       - arm64
