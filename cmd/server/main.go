@@ -136,6 +136,9 @@ func main() {
 		pgStoreSchema        string
 		pgStoreLocalPath     string
 		pgStoreInst          *store.PostgresStore
+		useSQLiteStore       bool
+		sqliteStoreLocalPath string
+		sqliteStoreInst      *store.SQLiteStore
 		useGitStore          bool
 		gitStoreRemoteURL    string
 		gitStoreUser         string
@@ -196,6 +199,10 @@ func main() {
 		}
 		useGitStore = false
 	}
+	if value, ok := lookupEnv("SQLITE_STORE_DIR", "sqlite_store_dir"); ok {
+		useSQLiteStore = true
+		sqliteStoreLocalPath = value
+	}
 	if value, ok := lookupEnv("GITSTORE_GIT_URL", "gitstore_git_url"); ok {
 		useGitStore = true
 		gitStoreRemoteURL = value
@@ -236,7 +243,33 @@ func main() {
 	// Determine and load the configuration file.
 	// Prefer the Postgres store when configured, otherwise fallback to git or local files.
 	var configFilePath string
-	if usePostgresStore {
+	if useSQLiteStore {
+		if sqliteStoreLocalPath == "" {
+			sqliteStoreLocalPath = wd
+		}
+		sqliteStoreInst, err = store.NewSQLiteStore(store.SQLiteStoreConfig{
+			Dir:      sqliteStoreLocalPath,
+			SpoolDir: filepath.Join(sqliteStoreLocalPath, "sqstore"),
+		})
+		if err != nil {
+			log.Errorf("failed to initialize sqlite store: %v", err)
+			return
+		}
+		examplePath := filepath.Join(wd, "config.example.yaml")
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if errBootstrap := sqliteStoreInst.Bootstrap(ctx, examplePath); errBootstrap != nil {
+			cancel()
+			log.Errorf("failed to bootstrap sqlite config: %v", errBootstrap)
+			return
+		}
+		cancel()
+		configFilePath = sqliteStoreInst.ConfigPath()
+		cfg, err = config.LoadConfigOptional(configFilePath, isCloudDeploy)
+		if err == nil {
+			cfg.AuthDir = sqliteStoreInst.AuthDir()
+			log.Infof("sqlite store enabled, workspace path: %s", sqliteStoreInst.WorkDir())
+		}
+	} else if usePostgresStore {
 		if pgStoreLocalPath == "" {
 			pgStoreLocalPath = wd
 		}
@@ -266,7 +299,7 @@ func main() {
 			cfg.AuthDir = pgStoreInst.AuthDir()
 			log.Infof("postgres-backed token store enabled, workspace path: %s", pgStoreInst.WorkDir())
 		}
-	} else if useObjectStore {
+	} else if useGitStore {
 		if objectStoreLocalPath == "" {
 			if writableBase != "" {
 				objectStoreLocalPath = writableBase
@@ -445,7 +478,9 @@ func main() {
 	}
 
 	// Register the shared token store once so all components use the same persistence backend.
-	if usePostgresStore {
+	if useSQLiteStore {
+		sdkAuth.RegisterTokenStore(sqliteStoreInst)
+	} else if usePostgresStore {
 		sdkAuth.RegisterTokenStore(pgStoreInst)
 	} else if useObjectStore {
 		sdkAuth.RegisterTokenStore(objectStoreInst)
